@@ -1,0 +1,303 @@
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define NUM_SLOTS  12
+#define NUM_DENOMS 7
+#define LOG_FILE   "purchases.txt"
+
+struct Slot {
+    char code[4];
+    char name[22];
+    int  price;
+    int  qty;
+};
+
+
+struct Session {
+    int itemsBought;
+    int totalSpent;
+};
+
+const int DENOMS[NUM_DENOMS] = {100, 50, 20, 10, 5, 2, 1};
+
+
+
+
+int read_line(const char *prompt, char *buf, int size) {
+    printf("%s", prompt);
+    if (fgets(buf, size, stdin) == NULL)
+        return 0;
+    buf[strcspn(buf, "\r\n")] = '\0';
+    return 1;
+}
+
+void to_upper(char *s) {
+    for (; *s != '\0'; s++)
+        *s = (char)toupper((unsigned char)*s);
+}
+
+
+
+int find_slot(struct Slot slots[], const char *code) {
+    for (int i = 0; i < NUM_SLOTS; i++)
+        if (strcmp(slots[i].code, code) == 0)
+            return i;
+    return -1;
+}
+
+int is_valid_denom(int amount) {
+    for (int i = 0; i < NUM_DENOMS; i++)
+        if (DENOMS[i] == amount)
+            return 1;
+    return 0;
+}
+
+void show_machine(struct Slot slots[]) {
+    printf("\n+--------------------------------------------+\n");
+    printf("|          *** SNACK-O-MATIC 3000 ***        |\n");
+    printf("+------+----------------------+-------+------+\n");
+    printf("| SLOT | ITEM                 | PRICE | LEFT |\n");
+    printf("+------+----------------------+-------+------+\n");
+    for (int i = 0; i < NUM_SLOTS; i++) {
+        if (slots[i].qty > 0)
+            printf("| %-4s | %-20s | Rs%-3d | %-4d |\n",
+                   slots[i].code, slots[i].name, slots[i].price, slots[i].qty);
+        else
+            printf("| %-4s | %-20s | Rs%-3d | %-4s |\n",
+                   slots[i].code, slots[i].name, slots[i].price, "NONE");
+    }
+    printf("+------+----------------------+-------+------+\n");
+}
+
+
+void give_change(int amount, int d) {
+    if (amount == 0 || d == NUM_DENOMS)
+        return;
+    int count = amount / DENOMS[d];
+    if (count > 0)
+        printf("   %d x Rs %d\n", count, DENOMS[d]);
+    give_change(amount % DENOMS[d], d + 1);
+}
+
+int collect_payment(int price) {
+    int paid = 0;
+    char buf[20];
+
+    printf("Accepted: Rs 1, 2, 5, 10, 20, 50, 100   (enter 0 to cancel)\n");
+
+    while (paid < price) {
+        printf("Amount due: Rs %d\n", price - paid);
+        if (!read_line("Insert money: Rs ", buf, sizeof buf))
+            break;                                 
+
+        int money;
+        if (sscanf(buf, "%d", &money) != 1) {
+            printf("Please type a number.\n");
+            continue;
+        }
+        if (money == 0)
+            break;                                  
+        if (!is_valid_denom(money)) {
+            printf("Rs %d is not accepted. Take it back.\n", money);
+            continue;
+        }
+        paid += money;
+    }
+
+    if (paid < price) {                              
+        printf("Transaction cancelled.\n");
+        if (paid > 0) {
+            printf("Refunding Rs %d:\n", paid);
+            give_change(paid, 0);
+        }
+        return -1;
+    }
+    return paid;
+}
+
+
+int pay_online(int total) {
+    char upi[40], pin[12];
+
+    printf("\n--- ONLINE PAYMENT (UPI) --- Amount: Rs %d\n", total);
+    printf("(enter 0 at any prompt to cancel)\n");
+
+
+    while (1) {
+        if (!read_line("Enter your UPI ID (e.g. name@upi): ", upi, sizeof upi))
+            return -1;
+        if (strcmp(upi, "0") == 0)
+            return -1;
+        if (strchr(upi, '@') != NULL && strlen(upi) >= 5)
+            break;
+        printf("Invalid UPI ID. It must look like name@bank.\n");
+    }
+
+    while (1) {
+        if (!read_line("Enter 4-digit UPI PIN: ", pin, sizeof pin))
+            return -1;
+        if (strcmp(pin, "0") == 0)
+            return -1;
+
+        int ok = (strlen(pin) == 4);
+        for (int i = 0; ok && pin[i] != '\0'; i++)
+            if (!isdigit((unsigned char)pin[i]))
+                ok = 0;
+
+        if (ok)
+            break;
+        printf("PIN must be exactly 4 digits.\n");
+    }
+
+    int txn = 100000 + rand() % 900000;
+    printf("Processing payment...\n");
+    printf("Payment of Rs %d successful!  Transaction ID: TXN%d\n", total, txn);
+    return txn;
+}
+
+
+void log_purchase(const struct Slot *s, int qty, int total,
+                  const char *method, int paid, int change) {
+    FILE *fp = fopen(LOG_FILE, "a");
+    if (fp == NULL)
+        return;
+    fprintf(fp, "%s | %s x%d | total: %d | %s | paid: %d | change: %d\n",
+            s->code, s->name, qty, total, method, paid, change);
+    fclose(fp);
+}
+
+
+void buy_item(struct Slot *s, int qty, struct Session *sess) {
+    int total = s->price * qty;
+    char buf[20];
+
+    printf("\nYou chose %d x %s  (Rs %d each)\n", qty, s->name, s->price);
+    printf("Total to pay: Rs %d\n", total);
+
+   
+    int mode = 0;
+    while (mode != 1 && mode != 2) {
+        printf("\nHow would you like to pay?\n");
+        printf("  1. Cash\n  2. Online (UPI)\n  0. Cancel\n");
+        if (!read_line("Choice: ", buf, sizeof buf))
+            return;
+        if (sscanf(buf, "%d", &mode) != 1)
+            mode = -1;
+        if (mode == 0) {
+            printf("Transaction cancelled.\n");
+            return;
+        }
+        if (mode != 1 && mode != 2)
+            printf("Please choose 1 or 2.\n");
+    }
+
+    int paid, change = 0;
+    const char *method;
+
+    if (mode == 1) {
+        method = "CASH";
+        paid = collect_payment(total);
+        if (paid == -1)
+            return;
+        change = paid - total;
+    } else {
+        method = "ONLINE";
+        if (pay_online(total) == -1) {
+            printf("Online payment cancelled.\n");
+            return;
+        }
+        paid = total;
+    }
+
+    s->qty -= qty;
+
+    printf("\n>>> Dispensing %d x %s ... *thunk* <<<\n", qty, s->name);
+    printf("Please collect your items from the tray.\n");
+    if (change > 0) {
+        printf("Your change is Rs %d:\n", change);
+        give_change(change, 0);
+    }
+
+    sess->itemsBought += qty;
+    sess->totalSpent += total;
+    log_purchase(s, qty, total, method, paid, change);
+}
+
+
+int main(void) {
+    struct Slot slots[NUM_SLOTS] = {
+        {"A1", "Salted Chips",       20, 20},
+        {"A2", "Masala Chips",       20, 20},
+        {"A3", "Namkeen Mix",        15, 15},
+        {"B1", "Cream Biscuits",     10, 25},
+        {"B2", "Choco Cookies",      30, 15},
+        {"B3", "Cake Slice",         25, 10},
+        {"C1", "Milk Chocolate",     40, 15},
+        {"C2", "Dark Chocolate",     50, 10},
+        {"C3", "Toffee Pack",         5, 30},
+        {"D1", "Cold Drink",         40, 20},
+        {"D2", "Orange Juice",       30, 15},
+        {"D3", "Mineral Water",      20, 25}
+    };
+    struct Session sess = {0, 0};
+    char input[20];
+
+    srand((unsigned)time(NULL));     
+
+    printf("Welcome! Pick a slot code to buy something.\n");
+
+    while (1) {
+        show_machine(slots);
+
+        if (!read_line("\nEnter slot code (or EXIT to leave): ", input, sizeof input))
+            break;
+
+        to_upper(input);
+
+        if (strcmp(input, "EXIT") == 0)
+            break;
+
+        int idx = find_slot(slots, input);
+        if (idx == -1) {
+            printf("There is no slot '%s'. Try again.\n", input);
+            continue;
+        }
+        if (slots[idx].qty == 0) {
+            printf("Sorry, %s is out of stock. Pick something else.\n", slots[idx].name);
+            continue;
+        }
+
+       
+        int qty = 0;
+        while (1) {
+            printf("\n%s - Rs %d each, %d available.\n",
+                   slots[idx].name, slots[idx].price, slots[idx].qty);
+            if (!read_line("How many do you want? (0 to go back): ", input, sizeof input))
+                break;
+            if (sscanf(input, "%d", &qty) != 1 || qty < 0) {
+                printf("Please enter a valid number.\n");
+                qty = -1;
+                continue;
+            if (qty > slots[idx].qty) {
+                printf("Only %d available. Choose a smaller number.\n", slots[idx].qty);
+                qty = -1;
+                continue;
+            }
+            break;
+        }
+        if (qty <= 0)
+            continue;                 
+
+        buy_item(&slots[idx], qty, &sess);
+    }
+
+    printf("\n------------- SESSION SUMMARY -------------\n");
+    printf("Items bought : %d\n", sess.itemsBought);
+    printf("Total spent  : Rs %d\n", sess.totalSpent);
+    printf("Thanks for visiting Snack-O-Matic! Bye!\n");
+
+    return 0;
+}
